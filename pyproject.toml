@@ -1,0 +1,77 @@
+[project]
+name = "nullscope"
+version = "0.1.0"
+description = "Zero-cost telemetry for Python. No-op when disabled, rich context when enabled."
+readme = "README.md"
+requires-python = ">=3.10, <3.15"
+license = { text = "MIT" }
+authors = [{ name = "Sean Brar", email = "hello@seanbrar.com" }]
+keywords = [
+    "telemetry",
+    "observability",
+    "metrics",
+    "tracing",
+    "zero-cost",
+    "nullscope",
+]
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Intended Audience :: Developers",
+    "License :: OSI Approved :: MIT License",
+    "Operating System :: OS Independent",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "Programming Language :: Python :: 3.14",
+    "Topic :: Software Development :: Libraries",
+    "Topic :: System :: Monitoring",
+    "Typing :: Typed",
+]
+dependencies = []
+
+[project.optional-dependencies]
+otel = ["opentelemetry-api>=1.20.0"]
+
+[dependency-groups]
+dev = [
+    "mypy>=1.8.0",
+    "opentelemetry-api>=1.20.0",
+    "pytest>=8.0.0",
+    "pytest-cov>=4.1.0",
+    "ruff>=0.3.0",
+]
+
+[project.urls]
+Homepage = "https://github.com/seanbrar/nullscope"
+Repository = "https://github.com/seanbrar/nullscope"
+Documentation = "https://github.com/seanbrar/nullscope/tree/main/docs"
+Issues = "https://github.com/seanbrar/nullscope/issues"
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/nullscope"]
+
+[tool.ruff]
+line-length = 100
+target-version = "py310"
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP", "B", "C4", "SIM", "TCH", "ARG", "PTH"]
+
+[tool.ruff.lint.per-file-ignores]
+"tests/*" = ["ARG"]
+
+[tool.mypy]
+python_version = "3.10"
+strict = true
+warn_return_any = true
+warn_unused_ignores = true
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-v --tb=short"
