@@ -10,8 +10,8 @@ import os
 import re
 import time
 from collections import deque
-from collections.abc import Callable, Iterator
-from contextlib import AbstractContextManager, contextmanager
+from collections.abc import Callable
+from contextlib import AbstractContextManager
 from contextvars import ContextVar
 from dataclasses import dataclass
 from functools import wraps
@@ -46,6 +46,11 @@ _SCOPE_NAME_PATTERN = re.compile(r"^[a-z][a-z0-9_]*(?:\.[a-z][a-z0-9_]*)*$")
 _REQUIRED_REPORTER_METHODS: Final[tuple[str, ...]] = ("record_timing", "record_metric")
 
 F = TypeVar("F", bound=Callable[..., Any])
+
+
+def _identity(func: F) -> F:
+    """Identity function for no-op decorator (avoids lambda allocation)."""
+    return func
 
 
 class _TelemetryMetadata(TypedDict, total=False):
@@ -132,13 +137,94 @@ class _NoOpTelemetryContext:
 
     def timed(self, name: str, **metadata: Any) -> Callable[[F], F]:  # noqa: ARG002
         """No-op decorator that returns the original function unchanged."""
-        return lambda func: func
+        return _identity
 
     def flush(self) -> None:
         pass
 
     def shutdown(self) -> None:
         pass
+
+
+class _Scope:
+    """Explicit context manager for scope timing (replaces @contextmanager for performance)."""
+
+    __slots__ = (
+        "_ctx",
+        "_scope_path",
+        "_metadata",
+        "_start_monotonic_s",
+        "_start_wall_time_s",
+        "_scope_token",
+        "_count_token",
+    )
+
+    def __init__(
+        self, ctx: "_EnabledTelemetryContext", name: str, metadata: dict[str, Any]
+    ) -> None:
+        _validate_scope_name(name, kind="Scope name")
+        self._ctx = ctx
+        self._metadata = metadata
+
+        # Capture current state and compute new stack once
+        scope_stack = _scope_stack_var.get()
+        new_stack = (*scope_stack, name)
+        self._scope_path = ".".join(new_stack)
+
+        # Set up context for entry
+        self._scope_token = _scope_stack_var.set(new_stack)
+        self._count_token = _call_count_var.set(_call_count_var.get() + 1)
+
+        # Capture timing at construction (will be finalized in __enter__)
+        self._start_monotonic_s: float = 0.0
+        self._start_wall_time_s: float = 0.0
+
+    def __enter__(self) -> "_EnabledTelemetryContext":
+        self._start_monotonic_s = time.perf_counter()
+        self._start_wall_time_s = time.time()
+        return self._ctx
+
+    def __exit__(
+        self,
+        exc_type: type[BaseException] | None,
+        exc_val: BaseException | None,
+        exc_tb: TracebackType | None,
+    ) -> None:
+        end_monotonic_s = time.perf_counter()
+        duration = end_monotonic_s - self._start_monotonic_s
+        end_wall_time_s = self._start_wall_time_s + duration
+
+        # Reset context vars
+        _scope_stack_var.reset(self._scope_token)
+        _call_count_var.reset(self._count_token)
+
+        # Capture final state for metadata
+        final_stack = _scope_stack_var.get()
+        final_count = _call_count_var.get()
+
+        # Build metadata (user metadata overrides built-in)
+        built: _TelemetryMetadata = {
+            "depth": len(final_stack),
+            "call_count": final_count,
+            "parent_scope": ".".join(final_stack) if final_stack else None,
+            "start_monotonic_s": self._start_monotonic_s,
+            "end_monotonic_s": end_monotonic_s,
+            "start_wall_time_s": self._start_wall_time_s,
+            "end_wall_time_s": end_wall_time_s,
+        }
+        enhanced_metadata: dict[str, Any] = {**built, **self._metadata}
+
+        # Report to all reporters
+        for reporter in self._ctx.reporters:
+            try:
+                reporter.record_timing(self._scope_path, duration, **enhanced_metadata)
+            except Exception as e:
+                log.error(
+                    "Telemetry reporter '%s' failed: %s",
+                    type(reporter).__name__,
+                    e,
+                    exc_info=True,
+                )
 
 
 class _EnabledTelemetryContext:
@@ -152,65 +238,16 @@ class _EnabledTelemetryContext:
     def __call__(
         self, name: str, **metadata: Any
     ) -> AbstractContextManager["_EnabledTelemetryContext"]:
-        return self._create_scope(name, **metadata)
-
-    @contextmanager
-    def _create_scope(
-        self, name: str, **metadata: Any
-    ) -> Iterator["_EnabledTelemetryContext"]:
-        """The actual scope implementation when enabled."""
-        _validate_scope_name(name, kind="Scope name")
-
-        scope_stack = _scope_stack_var.get()
-        call_count = _call_count_var.get()
-        scope_path = ".".join((*scope_stack, name))
-        start_monotonic_s = time.perf_counter()
-        start_wall_time_s = time.time()
-
-        scope_token = _scope_stack_var.set((*scope_stack, name))
-        count_token = _call_count_var.set(call_count + 1)
-
-        try:
-            yield self  # Return self so chained methods work
-        finally:
-            end_monotonic_s = time.perf_counter()
-            duration = end_monotonic_s - start_monotonic_s
-            end_wall_time_s = start_wall_time_s + duration
-            _scope_stack_var.reset(scope_token)
-            _call_count_var.reset(count_token)
-
-            final_stack = _scope_stack_var.get()
-            final_count = _call_count_var.get()
-
-            built: _TelemetryMetadata = {
-                "depth": len(final_stack),
-                "call_count": final_count,
-                "parent_scope": ".".join(final_stack) if final_stack else None,
-                "start_monotonic_s": start_monotonic_s,
-                "end_monotonic_s": end_monotonic_s,
-                "start_wall_time_s": start_wall_time_s,
-                "end_wall_time_s": end_wall_time_s,
-            }
-            enhanced_metadata: dict[str, Any] = {**built, **metadata}
-
-            for reporter in self.reporters:
-                try:
-                    reporter.record_timing(scope_path, duration, **enhanced_metadata)
-                except Exception as e:
-                    log.error(
-                        "Telemetry reporter '%s' failed: %s",
-                        type(reporter).__name__,
-                        e,
-                        exc_info=True,
-                    )
+        return _Scope(self, name, metadata)
 
     def metric(self, name: str, value: Any, **metadata: Any) -> None:
         """Record a metric within current scope context."""
         scope_stack = _scope_stack_var.get()
-        scope_path = ".".join((*scope_stack, name))
+        parent_scope = ".".join(scope_stack) if scope_stack else None
+        scope_path = f"{parent_scope}.{name}" if parent_scope else name
         built: _TelemetryMetadata = {
             "depth": len(scope_stack),
-            "parent_scope": ".".join(scope_stack) if scope_stack else None,
+            "parent_scope": parent_scope,
         }
         enhanced_metadata: dict[str, Any] = {**built, **metadata}
         for reporter in self.reporters:
