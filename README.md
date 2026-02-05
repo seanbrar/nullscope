@@ -86,6 +86,7 @@ request:
 | Environment Variable  | Description                          |
 | --------------------- | ------------------------------------ |
 | `NULLSCOPE_ENABLED=1` | Enable telemetry (default: disabled) |
+| `NULLSCOPE_STRICT=1`  | Enforce strict dotted scope names    |
 
 Note: environment flags are read at import time. In tests, reload `nullscope` after changing env vars.
 
@@ -112,6 +113,18 @@ with telemetry("http.request", method="GET", path="/api/users"):
     handle_request()
 ```
 
+### Decorators
+
+```python
+@telemetry.timed("http.handler")
+def handle() -> None:
+    process_request()
+
+@telemetry.timed("db.query", table="users")
+async def fetch_users() -> list[dict]:
+    return await db.fetch_all()
+```
+
 ### Metrics
 
 ```python
@@ -127,6 +140,28 @@ telemetry.metric("custom", value, metric_type="counter")  # Generic
 if telemetry.is_enabled:
     # Do expensive debug logging
     pass
+```
+
+### Reporter Lifecycle
+
+```python
+# Flush buffered reporters (if they implement flush())
+telemetry.flush()
+
+# Shutdown reporters cleanly (if they implement shutdown())
+telemetry.shutdown()
+```
+
+### Async Safety
+
+Nullscope uses `contextvars`, so each async task keeps its own scope stack without cross-talk:
+
+```python
+import asyncio
+
+async def worker(task_id: int):
+    with telemetry("task", task_id=task_id):
+        await asyncio.sleep(0.1)
 ```
 
 ## OpenTelemetry Adapter

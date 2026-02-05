@@ -94,6 +94,15 @@ class TelemetryReporter(Protocol):
 
 4. **Multiple reporters**: `TelemetryContext()` accepts multiple reporters. All receive the same data.
 
+### Lifecycle Hooks
+
+Reporters can optionally implement:
+
+- `flush()`
+- `shutdown()`
+
+The telemetry context forwards these calls when present and logs failures without crashing application code.
+
 ## 4) Scope Hierarchy Implementation
 
 Scopes form a hierarchy through dot-separated names:
@@ -127,3 +136,13 @@ from nullscope import DEPTH, PARENT_SCOPE, CALL_COUNT, START_WALL_TIME_S
 ```
 
 This allows reporters to reference keys without hardcoding strings, and provides a stable contract for what metadata is always present.
+
+## 6) Decorator Ergonomics
+
+Nullscope exposes `telemetry.timed("scope.name")` to instrument functions without manual `with` blocks.
+
+- Sync functions are wrapped with a timing scope
+- Async functions are also wrapped and awaited inside the scope
+- In disabled mode, the decorator returns the original function unchanged
+
+This keeps instrumentation concise while preserving the no-op-first design.
