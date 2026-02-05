@@ -1,6 +1,6 @@
 # Nullscope Roadmap
 
-## Version 0.1.0 (Current)
+## Version 0.1.0 (Completed)
 
 - [x] Zero-cost no-op pattern
 - [x] Enabled context with scope hierarchy
@@ -11,12 +11,13 @@
 - [x] `py.typed` marker for PEP 561
 - [x] Basic test coverage
 
-## Version 0.2.0 - Ergonomics
+## Version 0.2.0 (Current) - Ergonomics
 
-- [ ] Decorator support (`@nullscope.timed("operation")`)
-- [ ] Reporter lifecycle methods (`flush()`, `shutdown()`)
-- [ ] Async documentation and explicit testing
-- [ ] Improved error messages
+- [x] Decorator support (`@telemetry.timed("operation")`)
+- [x] Reporter lifecycle methods (`flush()`, `shutdown()`)
+- [x] Async documentation and explicit testing
+- [x] Improved error messages
+- [x] Performance benchmarks (baseline + optimization validation)
 
 ## Version 0.3.0 - Observability
 
@@ -28,7 +29,6 @@
 
 - [ ] Real-world usage feedback incorporated
 - [ ] API refinements based on feedback
-- [ ] Performance benchmarks
 
 ## Version 1.0.0 - Stable
 

@@ -77,6 +77,22 @@ with telemetry("request"):
             render_template()  # scope: request.handler.render
 ```
 
+## Decorator-Based Timing
+
+```python
+from nullscope import TelemetryContext
+
+telemetry = TelemetryContext()
+
+@telemetry.timed("http.handler", route="/users")
+def handle_users():
+    return query_users()
+
+@telemetry.timed("jobs.refresh_cache")
+async def refresh_cache():
+    ...
+```
+
 ## Custom Reporter Implementation
 
 ```python
@@ -145,6 +161,20 @@ telemetry = TelemetryContext(
 )
 ```
 
+## Reporter Lifecycle
+
+```python
+from nullscope import TelemetryContext
+
+telemetry = TelemetryContext(...)
+
+# Flush any buffered reporter state before process exits
+telemetry.flush()
+
+# Shutdown reporters with explicit lifecycle cleanup
+telemetry.shutdown()
+```
+
 ## Async Context Support
 
 Nullscope uses context variables, so it works correctly with async code:
@@ -169,6 +199,8 @@ async def main():
             fetch_user(3),
         )
 ```
+
+Each task keeps isolated context; nested task scopes do not leak across concurrent work.
 
 ## Conditional Metrics
 
