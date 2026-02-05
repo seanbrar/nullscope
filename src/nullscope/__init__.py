@@ -151,6 +151,7 @@ class _Scope:
 
     __slots__ = (
         "_ctx",
+        "_name",
         "_scope_path",
         "_metadata",
         "_start_monotonic_s",
@@ -164,22 +165,26 @@ class _Scope:
     ) -> None:
         _validate_scope_name(name, kind="Scope name")
         self._ctx = ctx
+        self._name = name
         self._metadata = metadata
 
-        # Capture current state and compute new stack once
-        scope_stack = _scope_stack_var.get()
-        new_stack = (*scope_stack, name)
-        self._scope_path = ".".join(new_stack)
-
-        # Set up context for entry
-        self._scope_token = _scope_stack_var.set(new_stack)
-        self._count_token = _call_count_var.set(_call_count_var.get() + 1)
-
-        # Capture timing at construction (will be finalized in __enter__)
+        # These are set in __enter__ to maintain context manager contract
+        self._scope_path: str = ""
+        self._scope_token: object = None
+        self._count_token: object = None
         self._start_monotonic_s: float = 0.0
         self._start_wall_time_s: float = 0.0
 
     def __enter__(self) -> "_EnabledTelemetryContext":
+        # Capture current state and compute new stack
+        scope_stack = _scope_stack_var.get()
+        new_stack = (*scope_stack, self._name)
+        self._scope_path = ".".join(new_stack)
+
+        # Set context vars here (not in __init__) to maintain context manager contract
+        self._scope_token = _scope_stack_var.set(new_stack)
+        self._count_token = _call_count_var.set(_call_count_var.get() + 1)
+
         self._start_monotonic_s = time.perf_counter()
         self._start_wall_time_s = time.time()
         return self._ctx
