@@ -12,9 +12,10 @@ import sys
 import time
 from collections.abc import Callable
 from dataclasses import dataclass
+from pathlib import Path
 
 # Ensure we can import nullscope from the source tree
-sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "src"))
+sys.path.insert(0, str(Path(__file__).parent / ".." / "src"))
 
 
 @dataclass
@@ -132,10 +133,8 @@ def run_disabled_benchmarks() -> list[BenchResult]:
 
     # Nested scopes
     def nested_scopes_3() -> None:
-        with telemetry("a"):
-            with telemetry("b"):
-                with telemetry("c"):
-                    pass
+        with telemetry("a"), telemetry("b"), telemetry("c"):
+            pass
 
     results.append(bench("disabled: 3 nested scopes", nested_scopes_3, iterations=50_000))
 
@@ -205,21 +204,21 @@ def run_enabled_benchmarks() -> list[BenchResult]:
 
     # Nested scopes
     def nested_scopes_3() -> None:
-        with telemetry("a"):
-            with telemetry("b"):
-                with telemetry("c"):
-                    pass
+        with telemetry("a"), telemetry("b"), telemetry("c"):
+            pass
 
     results.append(bench("enabled: 3 nested scopes", nested_scopes_3, iterations=20_000))
 
     # Deep nesting
     def nested_scopes_5() -> None:
-        with telemetry("a"):
-            with telemetry("b"):
-                with telemetry("c"):
-                    with telemetry("d"):
-                        with telemetry("e"):
-                            pass
+        with (
+            telemetry("a"),
+            telemetry("b"),
+            telemetry("c"),
+            telemetry("d"),
+            telemetry("e"),
+        ):
+            pass
 
     results.append(bench("enabled: 5 nested scopes", nested_scopes_5, iterations=10_000))
 
