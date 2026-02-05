@@ -12,7 +12,7 @@ import time
 from collections import deque
 from collections.abc import Callable
 from contextlib import AbstractContextManager
-from contextvars import ContextVar
+from contextvars import ContextVar, Token
 from dataclasses import dataclass
 from functools import wraps
 from types import TracebackType
@@ -170,8 +170,8 @@ class _Scope:
 
         # These are set in __enter__ to maintain context manager contract
         self._scope_path: str = ""
-        self._scope_token: object = None
-        self._count_token: object = None
+        self._scope_token: Token[tuple[str, ...]] | None = None
+        self._count_token: Token[int] | None = None
         self._start_monotonic_s: float = 0.0
         self._start_wall_time_s: float = 0.0
 
@@ -199,7 +199,9 @@ class _Scope:
         duration = end_monotonic_s - self._start_monotonic_s
         end_wall_time_s = self._start_wall_time_s + duration
 
-        # Reset context vars
+        # Reset context vars (tokens are guaranteed set by __enter__)
+        assert self._scope_token is not None
+        assert self._count_token is not None
         _scope_stack_var.reset(self._scope_token)
         _call_count_var.reset(self._count_token)
 
