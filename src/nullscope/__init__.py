@@ -4,17 +4,19 @@ Provides ultra-low overhead no-op behavior when disabled and rich, contextual
 metrics when enabled via environment flags.
 """
 
+import inspect
 import logging
 import os
 import re
 import time
 from collections import deque
-from collections.abc import Iterator
+from collections.abc import Callable, Iterator
 from contextlib import AbstractContextManager, contextmanager
 from contextvars import ContextVar
 from dataclasses import dataclass
+from functools import wraps
 from types import TracebackType
-from typing import Any, Final, Protocol, TypeAlias, TypedDict, runtime_checkable
+from typing import Any, Final, Protocol, TypeAlias, TypedDict, TypeVar, cast, runtime_checkable
 
 log = logging.getLogger(__name__)
 
@@ -41,6 +43,9 @@ START_WALL_TIME_S: Final[str] = "start_wall_time_s"  # Epoch seconds (correlatio
 END_WALL_TIME_S: Final[str] = "end_wall_time_s"
 
 _SCOPE_NAME_PATTERN = re.compile(r"^[a-z][a-z0-9_]*(?:\.[a-z][a-z0-9_]*)*$")
+_REQUIRED_REPORTER_METHODS: Final[tuple[str, ...]] = ("record_timing", "record_metric")
+
+F = TypeVar("F", bound=Callable[..., Any])
 
 
 class _TelemetryMetadata(TypedDict, total=False):
@@ -59,6 +64,36 @@ class TelemetryReporter(Protocol):
 
     def record_timing(self, scope: str, duration: float, **metadata: Any) -> None: ...  # noqa: D102
     def record_metric(self, scope: str, value: Any, **metadata: Any) -> None: ...  # noqa: D102
+
+
+def _validate_scope_name(name: str, *, kind: str) -> str:
+    """Validate user-provided scope names with explicit errors."""
+    if not isinstance(name, str):
+        raise TypeError(f"{kind} must be a string, got {type(name).__name__}")
+    if not name:
+        raise ValueError(f"{kind} must be a non-empty string")
+    if _STRICT_SCOPES and not _SCOPE_NAME_PATTERN.fullmatch(name):
+        raise ValueError(
+            f"Invalid {kind} '{name}'. Expected dot-separated lowercase segments "
+            "using [a-z0-9_], e.g. 'http.request'.",
+        )
+    return name
+
+
+def _validate_reporters(reporters: tuple[Any, ...]) -> None:
+    """Check reporter shape early so failures are obvious at setup time."""
+    for index, reporter in enumerate(reporters):
+        missing = [
+            method
+            for method in _REQUIRED_REPORTER_METHODS
+            if not callable(getattr(reporter, method, None))
+        ]
+        if missing:
+            missing_list = ", ".join(missing)
+            raise TypeError(
+                f"Reporter at position {index} ({type(reporter).__name__}) is invalid. "
+                f"Missing required callable method(s): {missing_list}.",
+            )
 
 
 @dataclass(frozen=True, slots=True)
@@ -95,6 +130,16 @@ class _NoOpTelemetryContext:
     def gauge(self, name: str, value: float, **metadata: Any) -> None:
         pass
 
+    def timed(self, name: str, **metadata: Any) -> Callable[[F], F]:  # noqa: ARG002
+        """No-op decorator that returns the original function unchanged."""
+        return lambda func: func
+
+    def flush(self) -> None:
+        pass
+
+    def shutdown(self) -> None:
+        pass
+
 
 class _EnabledTelemetryContext:
     """Full-featured telemetry context when enabled."""
@@ -114,13 +159,7 @@ class _EnabledTelemetryContext:
         self, name: str, **metadata: Any
     ) -> Iterator["_EnabledTelemetryContext"]:
         """The actual scope implementation when enabled."""
-        if not name or not isinstance(name, str):
-            raise ValueError("Scope name must be a non-empty string")
-        if _STRICT_SCOPES and not _SCOPE_NAME_PATTERN.fullmatch(name):
-            raise ValueError(
-                "Invalid scope name. Use lowercase letters, digits, and underscores; "
-                "segments separated by dots.",
-            )
+        _validate_scope_name(name, kind="Scope name")
 
         scope_stack = _scope_stack_var.get()
         call_count = _call_count_var.get()
@@ -200,6 +239,53 @@ class _EnabledTelemetryContext:
         """Record a gauge metric."""
         self.metric(name, value, metric_type="gauge", **metadata)
 
+    def timed(self, name: str, **metadata: Any) -> Callable[[F], F]:
+        """Decorator that times function execution under a fixed scope name."""
+        scope_name = _validate_scope_name(name, kind="Decorator scope name")
+
+        def decorator(func: F) -> F:
+            if inspect.iscoroutinefunction(func):
+                @wraps(func)
+                async def async_wrapper(*args: Any, **kwargs: Any) -> Any:
+                    with self(scope_name, **metadata):
+                        return await func(*args, **kwargs)
+
+                return cast("F", async_wrapper)
+
+            @wraps(func)
+            def wrapper(*args: Any, **kwargs: Any) -> Any:
+                with self(scope_name, **metadata):
+                    return func(*args, **kwargs)
+
+            return cast("F", wrapper)
+
+        return decorator
+
+    def _call_reporter_hook(self, hook_name: str) -> None:
+        """Call an optional lifecycle hook on all reporters."""
+        for reporter in self.reporters:
+            hook = getattr(reporter, hook_name, None)
+            if hook is None or not callable(hook):
+                continue
+            try:
+                hook()
+            except Exception as e:
+                log.error(
+                    "Reporter '%s' failed during %s: %s",
+                    type(reporter).__name__,
+                    hook_name,
+                    e,
+                    exc_info=True,
+                )
+
+    def flush(self) -> None:
+        """Flush reporters that implement optional lifecycle hooks."""
+        self._call_reporter_hook("flush")
+
+    def shutdown(self) -> None:
+        """Shutdown reporters that implement optional lifecycle hooks."""
+        self._call_reporter_hook("shutdown")
+
     @property
     def is_enabled(self) -> bool:
         return True
@@ -221,6 +307,8 @@ def TelemetryContext(*reporters: TelemetryReporter) -> TelemetryContextProtocol:
       overhead.
     """
     if _NULLSCOPE_ENABLED:
+        if reporters:
+            _validate_reporters(reporters)
         reps = reporters or (SimpleReporter(),)
         return _EnabledTelemetryContext(*reps)
     # Always return the same, pre-existing no-op instance.
@@ -258,6 +346,12 @@ class SimpleReporter:
         """Clear all collected telemetry (testing convenience)."""
         self.timings.clear()
         self.metrics.clear()
+
+    def flush(self) -> None:
+        """No-op lifecycle method for API compatibility."""
+
+    def shutdown(self) -> None:
+        """No-op lifecycle method for API compatibility."""
 
     def as_dict(self) -> dict[str, Any]:
         """Return a JSON-serializable snapshot of collected data (testing)."""
