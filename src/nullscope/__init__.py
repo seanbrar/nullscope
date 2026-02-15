@@ -41,6 +41,9 @@ START_MONOTONIC_S: Final[str] = "start_monotonic_s"  # High-precision monotonic 
 END_MONOTONIC_S: Final[str] = "end_monotonic_s"
 START_WALL_TIME_S: Final[str] = "start_wall_time_s"  # Epoch seconds (correlation)
 END_WALL_TIME_S: Final[str] = "end_wall_time_s"
+ERROR: Final[str] = "error"
+ERROR_TYPE: Final[str] = "error_type"
+ERROR_MESSAGE: Final[str] = "error_message"
 
 _SCOPE_NAME_PATTERN = re.compile(r"^[a-z][a-z0-9_]*(?:\.[a-z][a-z0-9_]*)*$")
 _REQUIRED_REPORTER_METHODS: Final[tuple[str, ...]] = ("record_timing", "record_metric")
@@ -61,6 +64,9 @@ class _TelemetryMetadata(TypedDict, total=False):
     end_monotonic_s: float
     start_wall_time_s: float
     end_wall_time_s: float
+    error: bool
+    error_type: str
+    error_message: str
 
 
 @runtime_checkable
@@ -219,6 +225,10 @@ class _Scope:
             "start_wall_time_s": self._start_wall_time_s,
             "end_wall_time_s": end_wall_time_s,
         }
+        if exc_type is not None:
+            built["error"] = True
+            built["error_type"] = exc_type.__qualname__
+            built["error_message"] = str(exc_val) if exc_val else ""
         enhanced_metadata: dict[str, Any] = {**built, **self._metadata}
 
         # Report to all reporters
@@ -398,68 +408,110 @@ class SimpleReporter:
         """No-op lifecycle method for API compatibility."""
 
     def as_dict(self) -> dict[str, Any]:
-        """Return a JSON-serializable snapshot of collected data (testing)."""
+        """Return a JSON-serializable snapshot of collected data."""
         return {
-            "timings": {key: list(values) for key, values in self.timings.items()},
-            "metrics": {key: list(values) for key, values in self.metrics.items()},
+            "timings": {
+                scope: [{"duration": d, **m} for d, m in entries]
+                for scope, entries in self.timings.items()
+            },
+            "metrics": {
+                scope: [{"value": v, **m} for v, m in entries]
+                for scope, entries in self.metrics.items()
+            },
         }
 
     def get_report(self) -> str:
         """Generate hierarchical telemetry report."""
         lines = ["=== Nullscope Report ===\n"]
-
-        # Group by hierarchy
-        timing_tree = self._build_hierarchy(self.timings)
-        self._format_tree(timing_tree, lines, "Timings")
-
-        if self.metrics:
-            lines.append("\n--- Metrics ---")
-            for scope, values in sorted(self.metrics.items()):
-                total = sum(v[0] for v in values if isinstance(v[0], int | float))
-                lines.append(
-                    f"{scope:<40} | Count: {len(values):<4} | Total: {total:,.0f}",
-                )
-
+        self._format_timings(lines)
+        self._format_metrics(lines)
         return "\n".join(lines)
 
-    def _build_hierarchy(
-        self,
-        data: dict[str, deque[tuple[float, dict[str, Any]]]],
-    ) -> dict[str, Any]:
-        """Build tree structure from dot-separated scope names."""
-        tree: dict[str, Any] = {}
-        for scope, values in data.items():
+    def _format_timings(self, lines: list[str]) -> None:
+        if not self.timings:
+            return
+        lines.append("\n--- Timings ---")
+        scope_set = set(self.timings)
+        # Identify prefixes that need structural header lines
+        headers: set[str] = set()
+        for scope in scope_set:
             parts = scope.split(".")
-            current = tree
-            for part in parts[:-1]:
-                current = current.setdefault(part, {})
-            current[parts[-1]] = values
-        return tree
+            for i in range(1, len(parts)):
+                prefix = ".".join(parts[:i])
+                if prefix not in scope_set:
+                    headers.add(prefix)
 
-    def _format_tree(
-        self,
-        tree: dict[str, Any],
-        lines: list[str],
-        title: str,
-        depth: int = 0,
-    ) -> None:
-        """Format hierarchical tree with indentation."""
-        if depth == 0:
-            lines.append(f"\n--- {title} ---")
-
-        for key, value in sorted(tree.items()):
-            indent = "  " * depth
-            if isinstance(value, dict):
-                lines.append(f"{indent}{key}:")
-                self._format_tree(value, lines, title, depth + 1)
+        for item in sorted(scope_set | headers):
+            parts = item.split(".")
+            indent = "  " * (len(parts) - 1)
+            name = parts[-1]
+            if item in headers:
+                lines.append(f"{indent}{name}:")
             else:
-                # Leaf node - actual timing data
-                durations = [v[0] for v in value]
-                avg_time = sum(durations) / len(durations)
-                total_time = sum(durations)
+                values = self.timings[item]
+                durations = [v[0] for v in values]
+                avg = sum(durations) / len(durations)
+                total = sum(durations)
                 lines.append(
-                    f"{indent}{key:<30} | "
+                    f"{indent}{name:<30} | "
                     f"Calls: {len(durations):<4} | "
-                    f"Avg: {avg_time:.4f}s | "
-                    f"Total: {total_time:.4f}s",
+                    f"Avg: {avg:.4f}s | "
+                    f"Total: {total:.4f}s",
                 )
+
+    def _format_metrics(self, lines: list[str]) -> None:
+        if not self.metrics:
+            return
+        lines.append("\n--- Metrics ---")
+        for scope, values in sorted(self.metrics.items()):
+            count = len(values)
+            numeric = [v[0] for v in values if isinstance(v[0], int | float)]
+            # Check metric_type from any entry's metadata
+            metric_type = None
+            for _, meta in values:
+                if "metric_type" in meta:
+                    metric_type = meta["metric_type"]
+                    break
+            if metric_type == "gauge" and numeric:
+                last = numeric[-1]
+                lines.append(f"{scope:<40} | Count: {count:<4} | Last: {last:,.2f}")
+            elif numeric:
+                total = sum(numeric)
+                lines.append(f"{scope:<40} | Count: {count:<4} | Total: {total:,.0f}")
+            else:
+                lines.append(f"{scope:<40} | Count: {count:<4}")
+
+
+class LogReporter:
+    """Reporter that emits telemetry as structured log records.
+
+    Useful in production environments with existing log aggregation.
+    Scope and primary value appear in the message; full metadata is
+    attached via the ``extra`` dict for formatters that support it.
+    """
+
+    __slots__ = ("_logger", "_level")
+
+    def __init__(
+        self, logger: logging.Logger | None = None, level: int = logging.DEBUG
+    ) -> None:
+        self._logger = logger or logging.getLogger("nullscope.telemetry")
+        self._level = level
+
+    def record_timing(self, scope: str, duration: float, **metadata: Any) -> None:
+        self._logger.log(
+            self._level,
+            "timing scope=%s duration=%.4fs",
+            scope,
+            duration,
+            extra={"telemetry_metadata": metadata},
+        )
+
+    def record_metric(self, scope: str, value: Any, **metadata: Any) -> None:
+        self._logger.log(
+            self._level,
+            "metric scope=%s value=%s",
+            scope,
+            value,
+            extra={"telemetry_metadata": metadata},
+        )

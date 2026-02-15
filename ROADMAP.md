@@ -21,9 +21,9 @@
 
 ## Version 0.3.0 - Observability
 
-- [ ] Exception tracking in scopes (record exception info)
-- [ ] Logging-based reporter adapter
-- [ ] Scope tags/labels support
+- [x] Exception tracking in scopes (record exception info)
+- [x] Logging-based reporter adapter
+- ~~Scope tags/labels support~~ — deferred (`**metadata` covers the use case)
 
 ## Version 0.4.0 - Polish
 

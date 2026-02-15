@@ -76,9 +76,9 @@ Output:
 === Nullscope Report ===
 
 --- Timings ---
-request:
-  auth                           | Calls: 1    | Avg: 0.0012s | Total: 0.0012s
-  handler                        | Calls: 1    | Avg: 0.0234s | Total: 0.0234s
+request                        | Calls: 1    | Avg: 0.0250s | Total: 0.0250s
+  auth                         | Calls: 1    | Avg: 0.0012s | Total: 0.0012s
+  handler                      | Calls: 1    | Avg: 0.0234s | Total: 0.0234s
 ```
 
 ## Configuration
