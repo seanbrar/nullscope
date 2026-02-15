@@ -93,6 +93,24 @@ async def refresh_cache():
     ...
 ```
 
+## Logging Reporter
+
+```python
+import logging
+from nullscope import TelemetryContext, LogReporter
+
+# Uses the "nullscope.telemetry" logger at DEBUG level by default
+telemetry = TelemetryContext(LogReporter())
+
+# Or configure with a custom logger and level
+logger = logging.getLogger("myapp.telemetry")
+telemetry = TelemetryContext(LogReporter(logger=logger, level=logging.INFO))
+
+with telemetry("request"):
+    handle_request()
+# Emits: "timing scope=request duration=0.0234s"
+```
+
 ## Custom Reporter Implementation
 
 ```python

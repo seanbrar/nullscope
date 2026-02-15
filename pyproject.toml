@@ -1,6 +1,6 @@
 [project]
 name = "nullscope"
-version = "0.2.0"
+version = "0.3.0"
 description = "Zero-cost telemetry for Python. No-op when disabled, rich context when enabled."
 readme = "README.md"
 requires-python = ">=3.10, <3.15"
